@@ -11,9 +11,6 @@ def lambda_handler(event, context):
     #Time in seconds for the presigned URL to expire
     #2628000 seconds = 730 hours = 1 month
     expiryTime = "2628000"
-
-    #SNS Topic to publish the URL.
-    topic_arn = "arn:aws:sns:*REGION*:*ACCOUNT*:*TOPIC*"
     
     #Object and bucket names are taken from the PUT
     bucket_name = event['Records'][0]['s3']['bucket']['name']
@@ -27,7 +24,7 @@ def lambda_handler(event, context):
     #print("Esta es la url: " + url)
     print(object_name)
     
-        #Generated URLs are saved in a DynamoDB table
+    #Generated URLs are saved in a DynamoDB table
     table = dynamodb.Table('S3_Objects_Presigned_URLs') 
     
     #Creation and expiration dates are inserted in the DynamoDB table
@@ -48,7 +45,10 @@ def lambda_handler(event, context):
             'S3_URI': s3_uri
         })
     
-    #Email parameters. ;essage is sent with file name (S3 object), URL and expiration date.
+    #SNS Topic to publish the URL.
+    topic_arn = "arn:aws:sns:*REGION*:*ACCOUNT*:*TOPIC*"
+    
+    #Email parameters. Email message is sent via SNS with file name (S3 object), URL and expiration date.
     mail_message = "File: " + object_name + ". Expires: " + expiration_time + " (UTC). URL: " + url
     mail_subject = "URL ready"
     snsClient.publish(
