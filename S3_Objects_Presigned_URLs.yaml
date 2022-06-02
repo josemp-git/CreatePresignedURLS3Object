@@ -1,23 +1,14 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: A presigned URL is generated every time an object is put into an specific Amazon S3 bucket. The URL is published to an SNS topic and sent to the final user via email. All generated URLs are stored in an Amazon DynamoDB table for tracking purposes, along with the creation and expiration times.
-  bucket: 
-    Description: Enter a name for your Amazon S3 bucket
-    Type: String
-  email:
-    Description: Email to send URLs
-    Type: String
-  expirationtime: 
-    Description: Expiration time (in seconds)
-    Type: Number
+Description: 
 Parameters: 
   bucket: 
     Description: Enter a name for your Amazon S3 bucket
     Type: String
   email:
-    Description: Email to send URLs
+    Description: Email to send presigned URLs
     Type: String
   expirationtime: 
-    Description: Expiration time (in seconds)
+    Description: 'Expiration time (in seconds). Example: 604800 = 1 week, 2628000 = 1 month'
     Type: Number
 
 Resources:
@@ -42,7 +33,7 @@ Resources:
           from datetime import datetime
           import time
           import os
-          
+
           def lambda_handler(event, context):
               s3Client = boto3.client("s3")
               snsClient = boto3.client("sns")
