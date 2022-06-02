@@ -1,0 +1,181 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: A presigned URL is generated every time an object is put into an specific Amazon S3 bucket. The URL is published to a topic via Amazon SNS. All generated URLs are stored in an Amazon DynamoDB table.
+Parameters: 
+  bucket: 
+    Description: Enter a name for your Amazon S3 bucket
+    Type: String
+  email:
+    Description: Email to send URLs
+    Type: String
+  expirationtime: 
+    Description: Expiration time (in seconds)
+    Type: Number
+
+Resources:
+  LambdaFunction:
+    DependsOn: Role
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.9
+      Role: !GetAtt Role.Arn
+      Handler: index.lambda_handler
+      Timeout: 10
+      Description: "Lambda function"
+      FunctionName: "S3_Objects_Presigned_URLs"
+      Environment:
+         Variables:
+          url_expiration_time: !Ref 'expirationtime'
+          topic_arn: !Ref SNSTopic
+      Code:  
+        ZipFile: |        
+          import boto3
+          import datetime
+          from datetime import datetime
+          import time
+          import os
+          
+          def lambda_handler(event, context):
+              s3Client = boto3.client("s3")
+              snsClient = boto3.client("sns")
+              dynamodb = boto3.resource('dynamodb')
+              
+              #Time in seconds for the presigned URL to expire
+              #Example: 2628000 seconds = 730 hours = 1 month
+              expiryTime = os.environ['url_expiration_time']
+              
+              #Object and bucket names are taken from the PUT
+              bucket_name = event['Records'][0]['s3']['bucket']['name']
+              object_name = event['Records'][0]['s3']['object']['key']
+              
+              #Presigned URL is generated
+              url = s3Client.generate_presigned_url('get_object',
+                  Params = {'Bucket': bucket_name, 'Key': object_name},
+                  ExpiresIn = expiryTime
+                  )
+              
+              #Creation and expiration time of the presigned URLs
+              now = datetime.now()
+              creation_time = now.strftime('%Y-%m-%d, %H:%M:%S')
+              expiration_time_epoch = int(url[-10:])
+              expiration_time = time.strftime('%Y-%m-%d, %H:%M:%S', time.localtime(expiration_time_epoch))
+              
+              #S3 object URI
+              s3_uri = 's3://' + bucket_name + '/' + object_name
+              
+              #Generated URLs are saved in a DynamoDB table along with the S3 object URI and creation/expiration time
+              table = dynamodb.Table('S3_Objects_Presigned_URLs') 
+              table.put_item(Item={
+                      'Object_name': object_name,
+                      'Creation_time': creation_time,
+                      'Expiration_time': expiration_time,
+                      'URL': url,
+                      'S3_URI': s3_uri
+                  })
+              
+              #SNS Topic to publish the URL.
+              topic_arn = os.environ['topic_arn']
+              
+              #Email parameters. Email message is sent via SNS with file name (S3 object), URL and expiration date.
+              mail_message = "File: " + object_name + ". Expires: " + expiration_time + " (UTC). URL: " + url
+              mail_subject = "URL ready"
+              snsClient.publish(
+                  TopicArn=topic_arn,
+                  Message=mail_message,
+                  Subject=mail_subject,
+                  )
+
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref bucket
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:Put
+            Function: !GetAtt [ LambdaFunction, Arn]
+
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: LambdaFunction
+    Properties:
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Action: "lambda:InvokeFunction"
+      Principal: "s3.amazonaws.com"
+      SourceArn: !Sub 'arn:aws:s3:::${bucket}'
+      SourceAccount: !Ref 'AWS::AccountId'
+
+  LambdaFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: "/aws/lambda/S3_Objects_Presigned_URLs"
+
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: "S3_Objects_Presigned_URLs_SNS_Topic"
+
+  Subscription:
+    DependsOn: SNSTopic
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Ref 'email'
+      Protocol: email
+      TopicArn: !Ref SNSTopic
+
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions: 
+          - 
+            AttributeName: "Object_name"
+            AttributeType: "S"
+      KeySchema: 
+          - 
+            AttributeName: "Object_name"
+            KeyType: "HASH"
+      TableName: "S3_Objects_Presigned_URLs"
+      BillingMode: PAY_PER_REQUEST
+  
+  Role:
+    Type: 'AWS::IAM::Role'
+    DependsOn: [DynamoDBTable, SNSTopic, LambdaFunctionLogs]
+    Properties:
+      RoleName: S3_Objects_Presigned_URLs_Role
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+              - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: S3_Objects_Presigned_URLsPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                - "logs:CreateLogGroup"
+                - "logs:CreateLogStream"
+                - "logs:PutLogEvents"
+                Resource: !GetAtt LambdaFunctionLogs.Arn
+              - Effect: Allow
+                Action:
+                - "dynamodb:PutItem"
+                Resource: !GetAtt DynamoDBTable.Arn
+              - Effect: Allow
+                Action:
+                - "s3:GetObject"
+                Resource: !Sub 'arn:aws:s3:::${bucket}/*'
+              - Effect: Allow
+                Action:
+                - "sns:Publish"
+                Resource: !Ref SNSTopic
+Outputs:
+  Bucket:
+    Description: S3 bucket
+    Value: !Ref bucket
+  ExpirationTime:
+    Description: Expiration time (in seconds)
+    Value: !Ref expirationtime
